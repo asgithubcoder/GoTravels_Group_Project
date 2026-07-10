@@ -15,6 +15,7 @@ const samplePackages = [
     durationDays: 4,
     availableSlots: 28,
     rating: 4.7,
+    reviewCount: 7,
     travelStyle: "relaxation",
     tripScope: "national",
     tags: ["beach", "food", "relaxation", "nightlife"],
@@ -29,6 +30,7 @@ const samplePackages = [
     durationDays: 6,
     availableSlots: 18,
     rating: 4.8,
+    reviewCount: 9,
     travelStyle: "adventure",
     tripScope: "national",
     tags: ["mountains", "trekking", "adventure", "nature"],
@@ -43,6 +45,7 @@ const samplePackages = [
     durationDays: 3,
     availableSlots: 35,
     rating: 4.6,
+    reviewCount: 5,
     travelStyle: "culture",
     tripScope: "national",
     tags: ["culture", "history", "food", "shopping"],
@@ -57,10 +60,26 @@ const samplePackages = [
     durationDays: 5,
     availableSlots: 24,
     rating: 4.9,
+    reviewCount: 8,
     travelStyle: "family",
     tripScope: "national",
     tags: ["family", "nature", "backwaters", "relaxation"],
     highlights: ["Houseboat stay", "Tea gardens", "Waterfall visit"]
+  },
+  {
+    title: "Hampi Discovery Starter",
+    destination: "Hampi",
+    description: "A new culture package for temples, ruins, sunset points, cafes, and guided heritage walks.",
+    imageUrl: "https://images.unsplash.com/photo-1590050752117-238cb0fb12b1?auto=format&fit=crop&w=900&q=80",
+    price: 12500,
+    durationDays: 3,
+    availableSlots: 22,
+    rating: null,
+    reviewCount: 0,
+    travelStyle: "culture",
+    tripScope: "national",
+    tags: ["culture", "history", "temples", "heritage"],
+    highlights: ["Virupaksha Temple", "Heritage walk", "Sunset viewpoint"]
   }
 ];
 
@@ -86,13 +105,28 @@ async function seed() {
     console.log(`Admin already exists: ${adminEmail}`);
   }
 
-  const packageCount = await Package.countDocuments();
-  if (packageCount === 0) {
-    await Package.insertMany(samplePackages);
-    console.log("Sample travel packages created");
+  const existingTitles = await Package.find({ title: { $in: samplePackages.map((item) => item.title) } }).distinct(
+    "title"
+  );
+  const missingPackages = samplePackages.filter((item) => !existingTitles.includes(item.title));
+
+  if (missingPackages.length > 0) {
+    await Package.insertMany(missingPackages);
+    console.log(`${missingPackages.length} sample travel package(s) created`);
   } else {
     console.log("Packages already exist, skipping sample data");
   }
+
+  await Promise.all(
+    samplePackages
+      .filter((item) => typeof item.reviewCount === "number" && item.rating)
+      .map((item) =>
+        Package.updateOne(
+          { title: item.title, $or: [{ reviewCount: { $exists: false } }, { reviewCount: 0 }] },
+          { $set: { reviewCount: item.reviewCount } }
+        )
+      )
+  );
 
   process.exit(0);
 }

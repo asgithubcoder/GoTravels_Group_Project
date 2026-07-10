@@ -34,11 +34,9 @@ export function scorePackageForUser(user, travelPackage) {
     reasons.push(`close to your preferred destination: ${destinationMatch}`);
   }
 
-  score += Math.min(10, Math.round(travelPackage.rating || 0));
-
   return {
-    score,
-    reasons: reasons.length > 0 ? reasons : ["popular package you may like"]
+    score: reasons.length > 0 ? score + Math.min(10, Math.round(travelPackage.rating || 0)) : 0,
+    reasons
   };
 }
 
@@ -52,7 +50,7 @@ export function personalizePackages(user, packages) {
         matchReasons: match.reasons
       };
     })
+    .filter((travelPackage) => travelPackage.matchScore > 0)
     .sort((a, b) => b.matchScore - a.matchScore);
 }
-
 

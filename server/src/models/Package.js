@@ -9,7 +9,8 @@ const packageSchema = new mongoose.Schema(
     price: { type: Number, required: true },
     durationDays: { type: Number, required: true },
     availableSlots: { type: Number, default: 20 },
-    rating: { type: Number, default: 4.5 },
+    rating: { type: Number, min: 1, max: 5, default: null },
+    reviewCount: { type: Number, default: 0 },
     travelStyle: {
       type: String,
       enum: ["relaxation", "adventure", "culture", "family", "luxury", "budget"],
@@ -27,4 +28,3 @@ const packageSchema = new mongoose.Schema(
 );
 
 export default mongoose.model("Package", packageSchema);
-

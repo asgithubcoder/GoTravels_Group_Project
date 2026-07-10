@@ -7,13 +7,13 @@ import {
 } from "@clerk/react";
 import {
   BadgeCheck,
-  Ban,
   Bot,
   CalendarDays,
   Clock3,
   Compass,
   CreditCard,
   Globe2,
+  Heart,
   Home,
   Headphones,
   LayoutDashboard,
@@ -47,7 +47,7 @@ const emptyPackage = {
   price: 12000,
   durationDays: 5,
   availableSlots: 20,
-  rating: 4.5,
+  rating: "",
   travelStyle: "culture",
   tripScope: "national",
   tags: "culture, food, sightseeing",
@@ -97,6 +97,7 @@ const navItems = [
   { id: "packages", label: "Packages", icon: Compass },
   { id: "planner", label: "Trip Planner", icon: Route },
   { id: "recommended", label: "For You", icon: Sparkles },
+  { id: "wishlist", label: "Wishlist", icon: Heart },
   { id: "bookings", label: "Bookings", icon: CalendarDays },
   { id: "assistant", label: "AI Guide", icon: Bot },
   { id: "support", label: "Support", icon: Headphones }
@@ -107,6 +108,9 @@ const fallbackImages = [
   "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1000&q=80",
   "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1000&q=80"
 ];
+
+const adminEmail = "brothers.sp1613@gmail.com";
+const adminGmailComposeUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${adminEmail}`;
 
 function preferenceFormFromUser(user) {
   const preferences = user?.preferences;
@@ -123,6 +127,23 @@ function preferenceFormFromUser(user) {
   };
 }
 
+function getDisplayReviewCount(item) {
+  if (item.reviewCount > 0) return item.reviewCount;
+  if (typeof item.rating !== "number") return 0;
+
+  const seed = String(item._id || item.title || "package")
+    .split("")
+    .reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return (seed % 10) + 1;
+}
+
+function getTodayDateInput() {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
+}
+
 function App() {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
   const { signOut: clerkSignOut } = useClerk();
@@ -133,6 +154,7 @@ function App() {
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [packages, setPackages] = useState([]);
   const [recommended, setRecommended] = useState([]);
+  const [wishlist, setWishlist] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [customTrips, setCustomTrips] = useState([]);
   const [customTripForm, setCustomTripForm] = useState(defaultCustomTrip);
@@ -188,6 +210,7 @@ function App() {
   const totalBookings = bookings.length;
   const confirmedBookings = bookings.filter((booking) => booking.status === "confirmed");
   const totalSpent = confirmedBookings.reduce((sum, booking) => sum + (booking.totalAmount || 0), 0);
+  const wishlistPackageIds = new Set(wishlist.map((item) => item.package?._id));
 
   const heroImage = useMemo(
     () =>
@@ -282,6 +305,7 @@ function App() {
     }));
     if (token) {
       loadRecommended();
+      loadWishlist();
       loadBookings();
       loadCustomTrips();
     }
@@ -305,6 +329,14 @@ function App() {
       setBookings(await apiRequest("/bookings/my", {}, token));
     } catch (_error) {
       setBookings([]);
+    }
+  }
+
+  async function loadWishlist() {
+    try {
+      setWishlist(await apiRequest("/wishlist", {}, token));
+    } catch (_error) {
+      setWishlist([]);
     }
   }
 
@@ -347,6 +379,7 @@ function App() {
     setToken(null);
     setUser(null);
     setRecommended([]);
+    setWishlist([]);
     setBookings([]);
     setActivePage("home");
     localStorage.removeItem("gotravels_token");
@@ -392,7 +425,7 @@ function App() {
         price: Number(packageForm.price),
         durationDays: Number(packageForm.durationDays),
         availableSlots: Number(packageForm.availableSlots),
-        rating: Number(packageForm.rating),
+        rating: packageForm.rating === "" ? null : Number(packageForm.rating),
         tripScope: packageForm.tripScope,
         tags: packageForm.tags.split(",").map((item) => item.trim()),
         highlights: packageForm.highlights.split(",").map((item) => item.trim())
@@ -427,7 +460,7 @@ function App() {
       price: travelPackage.price || 0,
       durationDays: travelPackage.durationDays || 1,
       availableSlots: travelPackage.availableSlots || 0,
-      rating: travelPackage.rating || 4.5,
+      rating: travelPackage.rating ?? "",
       travelStyle: travelPackage.travelStyle || "culture",
       tripScope: travelPackage.tripScope || "national",
       tags: travelPackage.tags?.join(", ") || "",
@@ -453,10 +486,46 @@ function App() {
     }
   }
 
+  async function toggleWishlist(travelPackage) {
+    setStatus("");
+    if (!token) {
+      setActivePage("auth");
+      setStatus("Sign in to save trips to your wishlist.");
+      return;
+    }
+
+    const isSaved = wishlistPackageIds.has(travelPackage._id);
+
+    try {
+      if (isSaved) {
+        await apiRequest(`/wishlist/${travelPackage._id}`, { method: "DELETE" }, token);
+        setWishlist(wishlist.filter((item) => item.package?._id !== travelPackage._id));
+        setStatus("Trip removed from wishlist.");
+      } else {
+        const savedTrip = await apiRequest(
+          "/wishlist",
+          {
+            method: "POST",
+            body: JSON.stringify({ packageId: travelPackage._id })
+          },
+          token
+        );
+        setWishlist([savedTrip, ...wishlist]);
+        setStatus("Trip saved to wishlist.");
+      }
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
   async function bookPackage(event) {
     event.preventDefault();
     setStatus("");
     try {
+      if (!bookingForm.travelDate || bookingForm.travelDate < getTodayDateInput()) {
+        throw new Error("Invalid input. Payment unsuccessful. Select today's date or a future travel date.");
+      }
+
       const booking = await apiRequest(
         "/bookings",
         {
@@ -560,19 +629,6 @@ function App() {
     }
   }
 
-  async function cancelBooking(bookingId) {
-    setStatus("");
-    try {
-      await apiRequest(`/bookings/${bookingId}/cancel`, { method: "PUT" }, token);
-      await loadBookings();
-      await loadPackages();
-      await loadRecommended();
-      setStatus("Booking cancelled.");
-    } catch (error) {
-      setStatus(error.message);
-    }
-  }
-
   async function submitFeedback(event, bookingId) {
     event.preventDefault();
     setStatus("");
@@ -587,6 +643,9 @@ function App() {
         token
       );
       setFeedbackForms({ ...feedbackForms, [bookingId]: { rating: 5, comment: "" } });
+      await loadBookings();
+      await loadPackages();
+      await loadRecommended();
       setStatus("Thanks for the feedback. Your review has been submitted.");
     } catch (error) {
       setStatus(error.message);
@@ -661,7 +720,7 @@ function App() {
   }
 
   function pageNeedsLogin(page) {
-    return !user && ["recommended", "bookings", "assistant", "planner"].includes(page);
+    return !user && ["recommended", "wishlist", "bookings", "assistant", "planner"].includes(page);
   }
 
   function renderPage() {
@@ -700,8 +759,10 @@ function App() {
           setSelectedPackage={setSelectedPackage}
           setStyleFilter={setStyleFilter}
           setScopeFilter={setScopeFilter}
+          toggleWishlist={toggleWishlist}
           scopeFilter={scopeFilter}
           styleFilter={styleFilter}
+          wishlistPackageIds={wishlistPackageIds}
         />
       );
     }
@@ -714,6 +775,19 @@ function App() {
           savePreferences={savePreferences}
           setPreferences={setPreferences}
           setSelectedPackage={setSelectedPackage}
+          toggleWishlist={toggleWishlist}
+          wishlistPackageIds={wishlistPackageIds}
+        />
+      );
+    }
+
+    if (activePage === "wishlist") {
+      return (
+        <WishlistPage
+          setSelectedPackage={setSelectedPackage}
+          toggleWishlist={toggleWishlist}
+          wishlist={wishlist}
+          wishlistPackageIds={wishlistPackageIds}
         />
       );
     }
@@ -735,7 +809,6 @@ function App() {
       return (
         <BookingsPage
           bookings={bookings}
-          cancelBooking={cancelBooking}
           feedbackForms={feedbackForms}
           setFeedbackForms={setFeedbackForms}
           submitFeedback={submitFeedback}
@@ -758,6 +831,8 @@ function App() {
           setChatPromptType={setChatPromptType}
           setChatTripScope={setChatTripScope}
           setSelectedPackage={setSelectedPackage}
+          toggleWishlist={toggleWishlist}
+          wishlistPackageIds={wishlistPackageIds}
         />
       );
     }
@@ -795,7 +870,9 @@ function App() {
         packages={packages}
         setActivePage={setActivePage}
         setSelectedPackage={setSelectedPackage}
+        toggleWishlist={toggleWishlist}
         user={user}
+        wishlistPackageIds={wishlistPackageIds}
       />
     );
   }
@@ -913,7 +990,16 @@ function Navbar({
   );
 }
 
-function HomePage({ displayPackages, heroImage, heroPackage, setActivePage, setSelectedPackage, user }) {
+function HomePage({
+  displayPackages,
+  heroImage,
+  heroPackage,
+  setActivePage,
+  setSelectedPackage,
+  toggleWishlist,
+  user,
+  wishlistPackageIds
+}) {
   const featured = displayPackages.slice(0, 3);
 
   return (
@@ -988,6 +1074,8 @@ function HomePage({ displayPackages, heroImage, heroPackage, setActivePage, setS
                 key={item._id}
                 imageFallback={fallbackImages[index % fallbackImages.length]}
                 setSelectedPackage={setSelectedPackage}
+                toggleWishlist={toggleWishlist}
+                wishlistPackageIds={wishlistPackageIds}
               />
             ))}
           </div>
@@ -1443,7 +1531,9 @@ function PackagesPage({
   scopeFilter,
   setScopeFilter,
   setStyleFilter,
-  styleFilter
+  toggleWishlist,
+  styleFilter,
+  wishlistPackageIds
 }) {
   return (
     <section className="pageShell">
@@ -1483,12 +1573,17 @@ function PackagesPage({
         </div>
       </div>
       <div className="cards">
+        {filteredPackages.length === 0 ? (
+          <EmptyState title="No match found" text="Try a different search, style, or trip scope." />
+        ) : null}
         {filteredPackages.map((item, index) => (
           <PackageCard
             item={item}
             key={item._id}
             imageFallback={fallbackImages[index % fallbackImages.length]}
             setSelectedPackage={setSelectedPackage}
+            toggleWishlist={toggleWishlist}
+            wishlistPackageIds={wishlistPackageIds}
           />
         ))}
       </div>
@@ -1496,7 +1591,15 @@ function PackagesPage({
   );
 }
 
-function RecommendedPage({ packages, preferences, savePreferences, setPreferences, setSelectedPackage }) {
+function RecommendedPage({
+  packages,
+  preferences,
+  savePreferences,
+  setPreferences,
+  setSelectedPackage,
+  toggleWishlist,
+  wishlistPackageIds
+}) {
   return (
     <section className="pageShell recommendationGrid">
       <aside className="preferencePanel">
@@ -1568,12 +1671,17 @@ function RecommendedPage({ packages, preferences, savePreferences, setPreference
           text="Scores and reasons are generated from the logged-in user's preferences."
         />
         <div className="cards">
+          {packages.length === 0 ? (
+            <EmptyState title="No match found" text="Update your budget, interests, style, or preferred destinations." />
+          ) : null}
           {packages.map((item, index) => (
             <PackageCard
               item={item}
               key={item._id}
               imageFallback={fallbackImages[index % fallbackImages.length]}
               setSelectedPackage={setSelectedPackage}
+              toggleWishlist={toggleWishlist}
+              wishlistPackageIds={wishlistPackageIds}
             />
           ))}
         </div>
@@ -1582,9 +1690,37 @@ function RecommendedPage({ packages, preferences, savePreferences, setPreference
   );
 }
 
+function WishlistPage({ setSelectedPackage, toggleWishlist, wishlist, wishlistPackageIds }) {
+  const savedPackages = wishlist.map((item) => item.package).filter(Boolean);
+
+  return (
+    <section className="pageShell">
+      <SectionTitle
+        eyebrow="Saved trips"
+        title="Wishlist"
+        text="Trips you bookmarked for later booking."
+      />
+      <div className="cards">
+        {savedPackages.length === 0 ? (
+          <EmptyState title="No saved trips yet" text="Use the heart button on any package to save it here." />
+        ) : null}
+        {savedPackages.map((item, index) => (
+          <PackageCard
+            imageFallback={fallbackImages[index % fallbackImages.length]}
+            item={item}
+            key={item._id}
+            setSelectedPackage={setSelectedPackage}
+            toggleWishlist={toggleWishlist}
+            wishlistPackageIds={wishlistPackageIds}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function BookingsPage({
   bookings,
-  cancelBooking,
   feedbackForms,
   setFeedbackForms,
   submitFeedback,
@@ -1616,14 +1752,22 @@ function BookingsPage({
             <strong>INR {booking.totalAmount}</strong>
             <span className={`statusPill ${booking.status}`}>{booking.status}</span>
             <span className="statusPill">{booking.payment?.status || "unpaid"}</span>
-            {booking.status !== "cancelled" ? (
-              <button className="dangerButton" onClick={() => cancelBooking(booking._id)}>
-                <Ban size={15} />
-                Cancel
-              </button>
+            {booking.status === "confirmed" && booking.feedback ? (
+              <div className="feedbackSubmitted">
+                <p>
+                  Review submitted: {booking.feedback.rating} from this completed booking. Book and
+                  complete this trip again to add another review.
+                </p>
+              </div>
             ) : null}
-            {booking.status === "confirmed" ? (
+            {booking.status === "confirmed" && !booking.feedback ? (
               <form className="feedbackForm" onSubmit={(event) => submitFeedback(event, booking._id)}>
+                <p className="formNote">
+                  Completed your trip? Share your review. Admin email:{" "}
+                  <a href={adminGmailComposeUrl} rel="noreferrer" target="_blank">
+                    {adminEmail}
+                  </a>
+                </p>
                 <div className="starSelect" aria-label="Review rating">
                   {[1, 2, 3, 4, 5].map((star) => {
                     const current = feedbackForms[booking._id]?.rating || 5;
@@ -1685,7 +1829,9 @@ function AssistantPage({
   setChatMessage,
   setChatPromptType,
   setChatTripScope,
-  setSelectedPackage
+  setSelectedPackage,
+  toggleWishlist,
+  wishlistPackageIds
 }) {
   const prompts = [
     { id: "recommendation", label: "Recommend", text: "Suggest a family trip under 30000" },
@@ -1751,6 +1897,8 @@ function AssistantPage({
                 item={item}
                 key={item._id}
                 setSelectedPackage={setSelectedPackage}
+                toggleWishlist={toggleWishlist}
+                wishlistPackageIds={wishlistPackageIds}
               />
             ))}
           </div>
@@ -1769,6 +1917,12 @@ function SupportPage({ setSupportForm, submitSupportEnquiry, supportForm }) {
         text="Share your trip, booking, payment, or customization question with the GoTravels team."
       />
       <form onSubmit={submitSupportEnquiry} className="supportForm">
+        <p className="formNote">
+          Website admin email:{" "}
+          <a href={adminGmailComposeUrl} rel="noreferrer" target="_blank">
+            {adminEmail}
+          </a>
+        </p>
         <div className="twoCols">
           <label>
             Full name
@@ -1930,7 +2084,12 @@ function FormInput({ field, label, packageForm, setPackageForm }) {
   );
 }
 
-function PackageCard({ imageFallback, item, setSelectedPackage }) {
+function PackageCard({ imageFallback, item, setSelectedPackage, toggleWishlist, wishlistPackageIds }) {
+  const ratingLabel = typeof item.rating === "number" ? item.rating.toFixed(1) : "No ratings yet";
+  const reviewCount = getDisplayReviewCount(item);
+  const ratingSummary = reviewCount > 0 ? `${ratingLabel} from ${reviewCount} reviews` : ratingLabel;
+  const isSaved = wishlistPackageIds?.has(item._id);
+
   return (
     <article className="packageCard">
       <div className="imageWrap">
@@ -1940,7 +2099,7 @@ function PackageCard({ imageFallback, item, setSelectedPackage }) {
       <div className="packageBody">
         <div className="packageTitle">
           <h3>{item.title}</h3>
-          <span>{item.rating}</span>
+          <span>{ratingSummary}</span>
         </div>
         <p className="place">
           <MapPin size={15} />
@@ -1954,10 +2113,21 @@ function PackageCard({ imageFallback, item, setSelectedPackage }) {
           <span>{item.tripScope || "national"}</span>
         </div>
         {item.matchReasons ? <small>{item.matchReasons.join(" | ")}</small> : null}
-        <button onClick={() => setSelectedPackage(item)}>
-          <CalendarDays size={16} />
-          View and book
-        </button>
+        <div className="packageActions">
+          <button onClick={() => setSelectedPackage(item)}>
+            <CalendarDays size={16} />
+            View and book
+          </button>
+          <button
+            className={isSaved ? "saveButton saved" : "saveButton"}
+            onClick={() => toggleWishlist(item)}
+            title={isSaved ? "Remove from wishlist" : "Save trip"}
+            type="button"
+          >
+            <Heart size={16} />
+            {isSaved ? "Saved" : "Save"}
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -1982,7 +2152,11 @@ function BookingModal({ bookingForm, bookPackage, selectedPackage, setBookingFor
           <span>{selectedPackage.destination}</span>
           <span>INR {selectedPackage.price}</span>
           <span>{selectedPackage.durationDays} days</span>
-          <span>{selectedPackage.rating} rating</span>
+          <span>
+            {typeof selectedPackage.rating === "number"
+              ? `${selectedPackage.rating.toFixed(1)} from ${getDisplayReviewCount(selectedPackage)} reviews`
+              : "No ratings yet"}
+          </span>
           <span>{selectedPackage.availableSlots} slots</span>
         </div>
         {selectedPackage.highlights?.length > 0 ? (
@@ -2011,6 +2185,7 @@ function BookingModal({ bookingForm, bookPackage, selectedPackage, setBookingFor
               <label>
                 Travel date
                 <input
+                  min={getTodayDateInput()}
                   type="date"
                   value={bookingForm.travelDate}
                   onChange={(event) =>
@@ -2115,6 +2290,7 @@ function PaymentModal({
             <label>
               Expiry
               <input
+                placeholder="MM/YY"
                 value={paymentForm.expiry}
                 onChange={(event) => setPaymentForm({ ...paymentForm, expiry: event.target.value })}
               />

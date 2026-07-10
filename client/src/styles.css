@@ -541,6 +541,24 @@ textarea:focus {
   line-height: 1.5;
 }
 
+.packageActions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr auto;
+}
+
+.saveButton {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f6d7ff;
+}
+
+.saveButton.saved {
+  background: rgba(244, 114, 182, 0.18);
+  border-color: rgba(244, 114, 182, 0.42);
+  color: #fbcfe8;
+}
+
 .authPanel,
 .glassPanel,
 .preferencePanel,
@@ -715,7 +733,7 @@ textarea:focus {
   border-radius: 8px;
   display: grid;
   gap: 14px;
-  grid-template-columns: 1.6fr 0.8fr 0.8fr 0.8fr auto auto auto;
+  grid-template-columns: 1.6fr 0.8fr 0.8fr 0.8fr auto auto;
   padding: 16px;
 }
 
@@ -748,6 +766,30 @@ textarea:focus {
   grid-column: 1 / -1;
   grid-template-columns: auto minmax(180px, 1fr) auto;
   padding-top: 10px;
+}
+
+.feedbackSubmitted {
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  color: #ccfbf1;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+  padding-top: 10px;
+}
+
+.feedbackSubmitted p {
+  margin: 0;
+}
+
+.formNote {
+  color: #b6c3ec;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.formNote a {
+  color: #67e8f9;
+  font-weight: 800;
 }
 
 .starSelect {

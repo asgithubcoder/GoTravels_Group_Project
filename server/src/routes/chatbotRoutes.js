@@ -6,14 +6,34 @@ import { personalizePackages } from "../utils/recommendPackages.js";
 
 const router = express.Router();
 
-function buildLocalTravelAnswer({ message, promptType, tripScope }, packages) {
+function findPackageMatches({ message, tripScope }, packages) {
   const query = String(message || "").toLowerCase();
   const scope = tripScope && tripScope !== "all" ? tripScope : "";
-  const budgetMatch = query.match(/(?:under|below|less than|budget)\s*(?:inr|rs\.?|₹)?\s*(\d+)/i);
+  const budgetMatch = query.match(/(?:under|below|less than|budget)\s*(?:inr|rs\.?)?\s*(\d+)/i);
   const maxBudget = budgetMatch ? Number(budgetMatch[1]) : null;
-  const words = query.split(/[^a-z0-9]+/).filter(Boolean);
+  const stopWords = new Set([
+    "a",
+    "ai",
+    "an",
+    "and",
+    "below",
+    "budget",
+    "find",
+    "for",
+    "guide",
+    "in",
+    "less",
+    "me",
+    "package",
+    "rs",
+    "suggest",
+    "than",
+    "trip",
+    "under"
+  ]);
+  const words = query.split(/[^a-z0-9]+/).filter((word) => word && !stopWords.has(word));
 
-  let matches = packages.filter((travelPackage) => {
+  return packages.filter((travelPackage) => {
     const haystack = [
       travelPackage.title,
       travelPackage.destination,
@@ -25,13 +45,21 @@ function buildLocalTravelAnswer({ message, promptType, tripScope }, packages) {
       .join(" ")
       .toLowerCase();
     const matchesScope = !scope || travelPackage.tripScope === scope;
-    const matchesBudget = !maxBudget || travelPackage.price <= maxBudget;
+    const matchesBudget = maxBudget === null || travelPackage.price <= maxBudget;
     const matchesWords = words.length === 0 || words.some((word) => haystack.includes(word));
     return matchesScope && matchesBudget && matchesWords;
   });
+}
+
+function buildLocalTravelAnswer({ message, promptType, tripScope }, packages) {
+  const budgetMatch = String(message || "").match(
+    /(?:under|below|less than|budget)\s*(?:inr|rs\.?)?\s*(\d+)/i
+  );
+  const maxBudget = budgetMatch ? Number(budgetMatch[1]) : null;
+  const matches = findPackageMatches({ message, tripScope }, packages);
 
   if (matches.length === 0) {
-    matches = packages.slice(0, 3);
+    return "No match found";
   }
 
   const top = matches.slice(0, 3);
@@ -59,17 +87,26 @@ router.post("/", protect, async (req, res, next) => {
     const { message, promptType = "recommendation", tripScope = "all" } = req.body;
     const packages = await Package.find().sort({ rating: -1, price: 1 }).limit(12);
     const personalizedPackages = personalizePackages(req.user, packages).slice(0, 6);
+    const packageMatches = findPackageMatches({ message, tripScope }, personalizedPackages);
     const userPreferences = req.user.preferences || {};
-    const packageContext = personalizedPackages
+    const packageContext = packageMatches
       .map((travelPackage, index) => {
         return `${index + 1}. ${travelPackage.title} | ${travelPackage.destination} | INR ${travelPackage.price} | ${travelPackage.durationDays} days | style: ${travelPackage.travelStyle} | slots: ${travelPackage.availableSlots} | match: ${travelPackage.matchScore} | reasons: ${travelPackage.matchReasons.join(", ")}`;
       })
       .join("\n");
 
+    if (packageMatches.length === 0) {
+      return res.json({
+        reply: "No match found",
+        suggestedPackages: [],
+        mode: "local"
+      });
+    }
+
     if (!hasOpenRouter && !hasOpenAI) {
       return res.json({
         reply: buildLocalTravelAnswer({ message, promptType, tripScope }, personalizedPackages),
-        suggestedPackages: personalizedPackages.slice(0, 3),
+        suggestedPackages: packageMatches.slice(0, 3),
         mode: "local"
       });
     }
@@ -90,7 +127,7 @@ When a user asks for trip suggestions, recommend packages from GoTravels first.
 Respect the user's requested prompt type: ${promptType}.
 Respect the requested trip scope when relevant: ${tripScope}.
 Do not invent package names, prices, payment statuses, or availability.
-If no listed package fits, say that clearly and suggest changing budget, style, or destination filters.
+If no listed package fits, answer exactly: No match found
 Do not use Markdown formatting. Avoid asterisks, headings, tables, and bullet symbols.
 Keep replies concise, friendly, and booking-focused.
 
@@ -112,7 +149,7 @@ ${packageContext || "No packages available."}`
 
     res.json({
       reply: cleanReply,
-      suggestedPackages: personalizedPackages.slice(0, 3)
+      suggestedPackages: packageMatches.slice(0, 3)
     });
   } catch (error) {
     next(error);
@@ -120,4 +157,3 @@ ${packageContext || "No packages available."}`
 });
 
 export default router;
-

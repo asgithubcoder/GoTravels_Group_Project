@@ -8,6 +8,7 @@ import chatbotRoutes from "./routes/chatbotRoutes.js";
 import customTripRoutes from "./routes/customTripRoutes.js";
 import packageRoutes from "./routes/packageRoutes.js";
 import supportRoutes from "./routes/supportRoutes.js";
+import wishlistRoutes from "./routes/wishlistRoutes.js";
 
 dotenv.config();
 
@@ -42,6 +43,7 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/chatbot", chatbotRoutes);
 app.use("/api/custom-trips", customTripRoutes);
 app.use("/api/support", supportRoutes);
+app.use("/api/wishlist", wishlistRoutes);
 
 app.use((err, _req, res, _next) => {
   const status = err.status || 500;

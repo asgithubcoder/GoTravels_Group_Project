@@ -6,13 +6,95 @@ import Package from "../models/Package.js";
 
 const router = express.Router();
 
+function todayDateString() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function dateOnlyString(value) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${parsed.getFullYear()}-${month}-${day}`;
+}
+
+function isInvalidTravelDate(value) {
+  const travelDate = dateOnlyString(value);
+  return !travelDate || travelDate < todayDateString();
+}
+
+function isValidCardExpiry(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
+  if (!match) return false;
+
+  const month = Number(match[1]);
+  const year = match[2].length === 2 ? Number(`20${match[2]}`) : Number(match[2]);
+  if (month < 1 || month > 12) return false;
+
+  const expiryEnd = new Date(year, month, 0, 23, 59, 59, 999);
+  return expiryEnd >= new Date();
+}
+
+async function refreshPackageRating(packageId) {
+  const [summary] = await Feedback.aggregate([
+    { $match: { package: packageId } },
+    {
+      $group: {
+        _id: "$package",
+        averageRating: { $avg: "$rating" },
+        reviewCount: { $sum: 1 }
+      }
+    }
+  ]);
+
+  await Package.findByIdAndUpdate(packageId, {
+    rating: summary ? Number(summary.averageRating.toFixed(1)) : null,
+    reviewCount: summary?.reviewCount || 0
+  });
+}
+
+async function failPayment(booking, message, status = 402) {
+  booking.status = "payment_failed";
+  booking.payment = {
+    provider: "sandbox",
+    status: "failed",
+    transactionId: `SANDBOX-FAILED-${Date.now()}`,
+    failureReason: message,
+    failedAt: new Date()
+  };
+  await booking.save();
+
+  return {
+    status,
+    body: {
+      message,
+      booking: await booking.populate("package")
+    }
+  };
+}
+
 router.post("/", protect, async (req, res, next) => {
   try {
     const { contactPhone, packageId, specialRequests, travelers, travelDate } = req.body;
     const travelPackage = await Package.findById(packageId);
+    const normalizedTravelDate = dateOnlyString(travelDate);
 
     if (!travelPackage) {
       return res.status(404).json({ message: "Package not found" });
+    }
+
+    if (!normalizedTravelDate || isInvalidTravelDate(normalizedTravelDate)) {
+      return res.status(400).json({
+        message: "Invalid input. Payment unsuccessful. Select today's date or a future travel date."
+      });
     }
 
     if (travelPackage.availableSlots < travelers) {
@@ -23,7 +105,7 @@ router.post("/", protect, async (req, res, next) => {
       user: req.user._id,
       package: travelPackage._id,
       travelers,
-      travelDate,
+      travelDate: normalizedTravelDate,
       contactPhone,
       specialRequests,
       totalAmount: travelPackage.price * travelers
@@ -42,8 +124,19 @@ router.get("/my", protect, async (req, res, next) => {
   try {
     const bookings = await Booking.find({ user: req.user._id })
       .populate("package")
-      .sort({ createdAt: -1 });
-    res.json(bookings);
+      .sort({ createdAt: -1 })
+      .lean();
+    const feedback = await Feedback.find({ booking: { $in: bookings.map((booking) => booking._id) } }).lean();
+    const feedbackByBooking = new Map(
+      feedback.map((review) => [review.booking.toString(), review])
+    );
+
+    res.json(
+      bookings.map((booking) => ({
+        ...booking,
+        feedback: feedbackByBooking.get(booking._id.toString()) || null
+      }))
+    );
   } catch (error) {
     next(error);
   }
@@ -106,25 +199,22 @@ router.post("/:id/mock-payment", protect, async (req, res, next) => {
 
     const digitsOnly = String(cardNumber || "").replace(/\D/g, "");
 
-    if (!cardholderName || !expiry || !cvv || digitsOnly.length < 12) {
-      return res.status(400).json({ message: "Enter valid sandbox payment details" });
+    if (isInvalidTravelDate(booking.travelDate)) {
+      const failedPayment = await failPayment(booking, "Invalid input. Payment unsuccessful.");
+      return res.status(failedPayment.status).json(failedPayment.body);
+    }
+
+    if (!cardholderName || !cvv || digitsOnly.length < 12 || !isValidCardExpiry(expiry)) {
+      const failedPayment = await failPayment(booking, "Invalid input. Payment unsuccessful.");
+      return res.status(failedPayment.status).json(failedPayment.body);
     }
 
     if (forceFailure || digitsOnly.endsWith("0000")) {
-      booking.status = "payment_failed";
-      booking.payment = {
-        provider: "sandbox",
-        status: "failed",
-        transactionId: `SANDBOX-FAILED-${Date.now()}`,
-        failureReason: "Sandbox card was declined",
-        failedAt: new Date()
-      };
-      await booking.save();
-
-      return res.status(402).json({
-        message: "Payment failed. Try another card or use a sandbox success card.",
-        booking: await booking.populate("package")
-      });
+      const failedPayment = await failPayment(
+        booking,
+        "Payment failed. Try another card or use a sandbox success card."
+      );
+      return res.status(failedPayment.status).json(failedPayment.body);
     }
 
     booking.status = "confirmed";
@@ -158,6 +248,11 @@ router.post("/:id/stripe-checkout", protect, async (req, res, next) => {
 
     if (booking.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "You cannot pay for this booking" });
+    }
+
+    if (isInvalidTravelDate(booking.travelDate)) {
+      const failedPayment = await failPayment(booking, "Invalid input. Payment unsuccessful.", 400);
+      return res.status(failedPayment.status).json(failedPayment.body);
     }
 
     const successUrl =
@@ -269,17 +364,23 @@ router.post("/:id/feedback", protect, async (req, res, next) => {
       return res.status(400).json({ message: "Feedback is available after booking is completed." });
     }
 
-    const feedback = await Feedback.findOneAndUpdate(
-      { booking: booking._id },
-      {
-        user: req.user._id,
-        booking: booking._id,
-        package: booking.package,
-        rating: Number(rating),
-        comment
-      },
-      { new: true, runValidators: true, upsert: true }
-    );
+    const existingFeedback = await Feedback.findOne({ booking: booking._id });
+
+    if (existingFeedback) {
+      return res.status(400).json({
+        message: "You already reviewed this completed booking. Book and complete this trip again to add another review."
+      });
+    }
+
+    const feedback = await Feedback.create({
+      user: req.user._id,
+      booking: booking._id,
+      package: booking.package,
+      rating: Number(rating),
+      comment
+    });
+
+    await refreshPackageRating(booking.package);
 
     res.status(201).json(feedback);
   } catch (error) {
